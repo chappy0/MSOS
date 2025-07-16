@@ -4,19 +4,22 @@ import numpy as np
 from omegaconf import OmegaConf
 from PIL import Image
 import os
-import json 
+import json # For saving/loading schedule if you prefer JSON
 
+# 假设 sampler.py 和 ldm 模块在您的 PYTHONPATH 中
+from ldm.models.diffusion.uni_pc.sampler import UniPCSampler # 您修改后的 UniPCSampler
 
-from ldm.models.diffusion.uni_pc.sampler import UniPCSampler 
+# from ldm.models.diffusion.uni_pc.uni_pc import model_wrapper, UniPC
+# from ldm.models.diffusion.uni_pc.uni_pc import NoiseScheduleVP
 from ldm.util import instantiate_from_config
 
-
+# from ldm.models.diffusion.step_optim_search import StepOptim,NoiseScheduleVP
 
 from ldm.models.diffusion.stages_step_optim import StepOptim,NoiseScheduleVP
 # --- Configuration ---
 prompts_folder = r"D:\paper\FCDiffusion_code-main\datasets\laion_aesthetics_6.5\laion-600k-aesthetic-6.5plus-768"
-
-output_folder = r"D:\paper\FCDiffusion_code-main\datasets\unipc_test_laion" c
+# prompts_folder = r"D:\paper\FCDiffusion_code-main\datasets\00001"
+output_folder = r"D:\paper\FCDiffusion_code-main\datasets\unipc_test_laion" # 新的输出文件夹
 config_path = "configs/stable-diffusion/v2-inference.yaml"
 ckpt_path = r"D:\paper\FCDiffusion_code-main\models\v2-1_512-ema-pruned.ckpt"
 n_steps = 4 # 您期望的采样步数
@@ -26,7 +29,13 @@ height = 512
 width = 512
 batch_size =1
 
-
+# 定义优化时间表文件的路径
+# optimized_schedule_dir = "./optimized_schedules_unipc" # 建议将调度文件统一存放
+# os.makedirs(optimized_schedule_dir, exist_ok=True)
+# # 基于模型、配置和步数生成一个独特的文件名
+# # (更复杂可以加入 StepOptim 的核心参数摘要到文件名中)
+# schedule_filename = f"sd_v2_1_{n_steps}steps_schedule_0612.txt"
+# optimized_schedule_file = os.path.join(optimized_schedule_dir, schedule_filename)
 
 optimized_schedule_file = r'D:\paper\stablediffusion-main\stablediffusion-main\optimized_schedules_search\sd_v2_1_5steps_schedule_search.txt'
 
@@ -34,7 +43,7 @@ os.makedirs(output_folder, exist_ok=True)
 print(f"ℹ️  Prompts will be read from: {prompts_folder}") # 修正路径显示
 print(f"ℹ️  Generated images will be saved to: {output_folder}") # 修正路径显示
 
-# 1. load the model
+# 1. 加载模型 (与您之前脚本一致，确保dtype修正)
 print("🔄 Loading model...")
 config = OmegaConf.load(config_path)
 model = instantiate_from_config(config.model)
@@ -50,7 +59,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = model.to(device).eval()
 print("✅ Model loaded successfully!")
 
-# 2. check the optimal schedule
+# 2. 检查或生成优化后的时间步
 custom_timesteps = None
 if os.path.exists(optimized_schedule_file):
     print(f"🔄 Loading optimized timesteps from: {optimized_schedule_file}")
@@ -75,17 +84,31 @@ if custom_timesteps is None:
     ns_instance = NoiseScheduleVP('discrete', alphas_cumprod=alphas_for_ns, dtype=torch.float32)
     
 
+    # step_optimizer_params = {
+    #     'p_is_dynamic': True, 'p_val_at_T': 3.6, 'p_val_at_eps': 0.06,
+    #     'p_dynamic_transform': 'sigmoid', 'p_dynamic_sigmoid_k': 3.6,
+    #     'objective_type': 'paper_power_q', 'power_q_val': 1.6, # 或者 'minimax_lte'
+    #     'use_pf_inspired_error_metric': True,
+    #     'use_rho_scaling': False, 'rho_q_is_dynamic': False,
+    #     'rho_q_base_val': 1.6, 'rho_q_nfe_factor': 0.6,
 
+    # }
+
+    # step_optimizer = StepOptim(ns=ns_instance.to(torch.device("cpu")), **step_optimizer_params)
     
     step_optimizer = StepOptim(ns=ns_instance)
-    eps_t_0_for_optim = (1. / ns_instance.total_N) if ns_instance.schedule_name == 'discrete'  else 1e-3
+    eps_t_0_for_optim = (1. / ns_instance.total_N) if ns_instance.schedule == 'discrete'  else 1e-3
+    # eps_t_0_for_optim = (1. / ns_instance.total_N) if ns_instance.schedule_name == 'discrete'  else 1e-3
     
     optimized_t_steps_tensor, _ = step_optimizer.get_ts_lambdas(
        n_steps,
         eps=eps_t_0_for_optim,
-        initType='edm'
+        # eps=0.02464701,
+        # 0.02593,
+        initType='edm',
+        # init_rho=5.9
     )
-    custom_timesteps = optimized_t_steps_tensor.to(device) 
+    custom_timesteps = optimized_t_steps_tensor.to(device) # 确保在正确的设备上
     
     try:
         np.savetxt(optimized_schedule_file, custom_timesteps.cpu().numpy(), fmt='%.8f')
@@ -93,10 +116,10 @@ if custom_timesteps is None:
     except Exception as e:
         print(f"❌ Error saving timesteps to {optimized_schedule_file}: {e}")
 
-# 3. set unipc sampler
+# 3. 设置 UniPC 采样器
 sampler = UniPCSampler(model)
 
-
+# ... (后续的图像生成参数, 获取uc, 循环处理prompts - 与您提供的 test.py 相同) ...
 
 
 uc = model.get_learned_conditioning(batch_size * [""])
@@ -132,11 +155,11 @@ else:
             verbose=True, 
             unconditional_guidance_scale=guidance_scale,
             unconditional_conditioning=uc,
-            custom_timesteps=custom_timesteps, 
+            custom_timesteps=custom_timesteps, # <<< ✅ 传递优化后的时间步 (可能为 None)
             uni_pc_order=3,
             optimize_steps_on_demand=False
         )
-
+        # ... (解码和保存图像 - 与您提供的 test.py 相同) ...
         x_samples = model.decode_first_stage(samples)
         x_samples = torch.clamp((x_samples + 1.0) / 2.0, 0.0, 1.0)
         x_samples_np = x_samples.cpu().permute(0, 2, 3, 1).numpy()
