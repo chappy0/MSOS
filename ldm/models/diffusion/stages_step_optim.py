@@ -6,12 +6,11 @@ import numpy as np
 from scipy.optimize import minimize, LinearConstraint, differential_evolution
 import logging
 import time
-import os # 确保 os 已导入
+import os 
 
-# --- 日志记录设置 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
-# --- Robust NoiseScheduleVP Definition (与您提供的代码相同，保持不变) ---
+
 def interpolate_fn_for_ns(x_query, x_pts, y_pts, device=torch.device('cpu'), dtype=torch.float32):
     x_query_orig_shape = x_query.shape
     x_query_flat = x_query.reshape(-1).to(device, dtype=dtype)
@@ -169,7 +168,6 @@ class NoiseScheduleVP:
         else:
             raise NotImplementedError(f"inverse_edm_sigma for schedule {self.schedule_name} not implemented.")
 
-# --- StepOptim Class (与您提供的代码相同，保持不变) ---
 class StepOptim(object):
     def __init__(self, ns: NoiseScheduleVP,
                  p_fixed_val=2.0,
@@ -446,76 +444,6 @@ class StepOptim(object):
         return torch.from_numpy(t_res_np.copy()).to(self.ns.dtype), torch.from_numpy(lambda_res_ext_np.copy()).to(self.ns.dtype)
 
 
-# --- 核心优化与搜索流程 ---
-
-# --- UniPC 专用流程 ---
-# def find_optimal_schedule(
-#     nfe: int, 
-#     noise_schedule: NoiseScheduleVP, 
-#     initial_rho: float, 
-#     initial_epsilon: float,
-#     return_fitness: bool
-# ):
-#     """
-#     为 UniPC 执行核心的“二次优化”流程。
-#     目标是为 NFE 步的 UniPC 生成 NFE+1 点的 t 调度。
-#     """
-#     logging.debug(f"Executing UniPC inner optimization for NFE={nfe}, rho={initial_rho:.2f}, epsilon={initial_epsilon:.5f}")
-
-#     step_optimizer = StepOptim(
-#         ns=noise_schedule,
-#         objective_type='paper_eq35',
-#         p_fixed_val=2.0,
-#         use_pf_inspired_error_metric=True
-#     )
-
-#     try:
-#         # 步骤 1: 调用 get_ts_lambdas 进行二次优化 (NFE 步对应 N_intervals)
-#         optimized_t_steps, optimized_lambda_steps = step_optimizer.get_ts_lambdas(
-#             N_intervals=nfe,
-#             initType='edm',
-#             init_rho=initial_rho,
-#             eps_t_0_val=initial_epsilon
-#         )
-#     except Exception as e:
-#         logging.warning(f"UniPC Inner optimization failed for rho={initial_rho:.2f}, eps={initial_epsilon:.4f}. Reason: {e}")
-#         return None, float('inf') if return_fitness else None
-
-#     if not return_fitness:
-#         return optimized_t_steps
-
-#     # 步骤 2: 计算这个最终优化调度的理论误差作为“分数”
-#     final_lambda_for_eval = optimized_lambda_steps.cpu().numpy()[1:-1]
-    
-#     try:
-#         fitness_score = step_optimizer._sel_lambdas_obj_calculator(
-#             lambda_vec_opt_part=final_lambda_for_eval,
-#             N_intervals=nfe,
-#             eps_t_0_val=initial_epsilon,
-#             trunc_num_setting=0,
-#             use_pf_inspired_error_metric_calc_for_lte=True
-#         )
-#         t_schedule_np = optimized_t_steps.cpu().numpy()
-#         t_diffs = np.abs(np.diff(np.sort(t_schedule_np)))
-#         nfe_low, dist_at_low = 4.0, 0.15; nfe_high, dist_at_high = 20.0, 0.01
-#         slope = (dist_at_high - dist_at_low) / (nfe_high - nfe_low)
-#         min_t_distance = np.clip(dist_at_low + slope * (nfe - nfe_low), dist_at_high, dist_at_low)
-#         violations = min_t_distance - t_diffs
-#         spacing_penalty = 1e9 * np.sum(np.maximum(0, violations)**2)
-        
-#         return optimized_t_steps, fitness_score + spacing_penalty
-#     except Exception as e:
-#         logging.error(f"Error calculating fitness for optimized UniPC schedule: {e}")
-#         return None, float('inf')
-
-# def fitness_function_for_unipc_es(params, nfe, noise_schedule):
-#     """ UniPC 进化搜索的全局适应度函数 """
-#     rho, epsilon = params[0], params[1]
-#     _, fitness_score = find_optimal_schedule(
-#         nfe=nfe, noise_schedule=noise_schedule, initial_rho=rho,
-#         initial_epsilon=epsilon, return_fitness=True
-#     )
-#     return fitness_score
 
 
 def find_optimal_schedule(
@@ -531,11 +459,11 @@ def find_optimal_schedule(
     """
     logging.debug(f"Executing UniPC inner optimization for NFE={nfe}, rho={initial_rho:.2f}, epsilon={initial_epsilon:.5f}, t_max={t_max:.3f}")
 
-    # --- KEY CHANGE: Temporarily set the upper bound on the noise schedule object ---
+
     original_T = noise_schedule.T
     noise_schedule.T = t_max
     
-    # This StepOptim instance will now use the new T_max
+
     step_optimizer = StepOptim(
         ns=noise_schedule,
         objective_type='paper_eq35',
@@ -585,7 +513,7 @@ def find_optimal_schedule(
 
 def fitness_function_for_unipc_es(params, nfe, noise_schedule):
     """ UniPC evolutionary search fitness function, now for 3 parameters. """
-    # --- KEY CHANGE: Unpack 3 parameters ---
+
     rho, epsilon, t_max = params[0], params[1], params[2]
     
     _, fitness_score = find_optimal_schedule(
@@ -600,23 +528,23 @@ def run_unipc_search(nfe: int, noise_schedule: NoiseScheduleVP,seed):
     """ Runs the EA to find the best rho, epsilon, AND T_max for UniPC. """
     logging.info(f"===== Starting UniPC Evolutionary Search for NFE={nfe} =====")
     
-    # --- KEY CHANGE: Add bounds for the new T_max parameter ---
+
     param_bounds = [
-        (5.0, 7.0),      # Bounds for rho
+        (3.0, 13.0),     # Bounds for rho
         (0.01, 0.03),    # Bounds for epsilon
         (0.96, 1.0)      # Bounds for T_max (the upper bound)
     ]
+
     
     result = differential_evolution(
         fitness_function_for_unipc_es,
         bounds=param_bounds, args=(nfe, noise_schedule),
-        # maxiter=60, popsize=20, disp=True, tol=0.01, workers=-1, updating='deferred',
         maxiter=60, popsize=20, disp=True, tol=0.01, workers=-1, updating='deferred',
+        # maxiter=200, popsize=60, disp=True, tol=0.01, workers=-1, updating='deferred',
         seed=seed
 
     )
 
-    # --- KEY CHANGE: Unpack 3 results ---
     best_rho, best_epsilon, best_t_max = result.x
     
     logging.info(f"✅ UniPC Search Complete! Optimal parameters: rho={best_rho:.4f}, epsilon={best_epsilon:.5f}, T_max={best_t_max:.4f}")
@@ -624,18 +552,15 @@ def run_unipc_search(nfe: int, noise_schedule: NoiseScheduleVP,seed):
     min_error_score = result.fun # Get the optimal fitness (error) score
     
     logging.info(f"✅ UniPC Search Complete! Optimal parameters: rho={best_rho:.4f}, epsilon={best_epsilon:.5f}, T_max={best_t_max:.4f}")
-    # --- ADD THIS LINE ---
+
     logging.info(f"   📉 Minimum Theoretical Error Score Found: {min_error_score:.6e}") # Use scientific notation for clarity
 
-    # --- MODIFY THIS LINE ---
-    # Return all three found parameters AND the score
+
     return best_rho, best_epsilon, best_t_max, min_error_score
-    # Return all three found parameters
-    # return best_rho, best_epsilon, best_t_max
 
 
 
-# --- (新增) DDIM 专用流程 ---
+
 def find_optimal_schedule_ddim(
     nfe: int, 
     noise_schedule: NoiseScheduleVP, 
@@ -645,8 +570,8 @@ def find_optimal_schedule_ddim(
     return_fitness: bool
 ):
     """
-    为 DDIM 执行核心的“二次优化”流程。
-    目标是为 NFE 步的 DDIM 直接生成 NFE 点的 t 调度 (对应 NFE-1 个优化区间)。
+Perform the core “second-order optimization” procedure for DDIM.  
+The goal is to directly produce an NFE-point t-schedule (spanning NFE-1 optimization intervals) for an NFE-step DDIM.
     """
     logging.debug(f"Executing DDIM inner optimization for NFE={nfe}, rho={initial_rho:.2f}, epsilon={initial_epsilon:.5f}")
 
@@ -654,7 +579,6 @@ def find_optimal_schedule_ddim(
     # noise_schedule.T = t_max
 
     if nfe <= 1:
-        # 无法为1步或更少步数进行优化，直接返回线性t调度
         final_t = np.linspace(noise_schedule.T, initial_epsilon, nfe, dtype=np.float64)
         final_t_tensor = torch.from_numpy(final_t).to(noise_schedule.dtype, noise_schedule._device)
         return final_t_tensor, 0 if return_fitness else final_t_tensor
@@ -666,7 +590,6 @@ def find_optimal_schedule_ddim(
     )
 
     try:
-        # 步骤 1: 为 nfe-1 个区间调用优化器，以获得 nfe 个点
         optimized_t_steps, optimized_lambda_steps = step_optimizer.get_ts_lambdas(
             N_intervals=ddim_intervals, initType='edm', init_rho=initial_rho, eps_t_0_val=initial_epsilon
         )
@@ -677,7 +600,6 @@ def find_optimal_schedule_ddim(
     if not return_fitness:
         return optimized_t_steps
 
-    # 步骤 2: 为得到的 NFE 点调度计算适应度分数
     final_lambda_for_eval = optimized_lambda_steps.cpu().numpy()[1:-1]
     
     try:
@@ -699,7 +621,6 @@ def find_optimal_schedule_ddim(
         return None, float('inf')
 
 def fitness_function_for_ddim_es(params, nfe, noise_schedule):
-    """ DDIM 进化搜索的全局适应度函数 """
     rho, epsilon = params[0], params[1]
     _, fitness_score = find_optimal_schedule_ddim(
         nfe=nfe, noise_schedule=noise_schedule, initial_rho=rho,
@@ -708,16 +629,17 @@ def fitness_function_for_ddim_es(params, nfe, noise_schedule):
     return fitness_score
 
 def run_ddim_search(nfe: int, noise_schedule: NoiseScheduleVP):
-    """ 使用进化算法，为 DDIM 自动搜索最优的 rho 和 epsilon """
-    logging.info(f"===== 开始为 NFE={nfe} 进行 DDIM 专属进化搜索 =====")
-    param_bounds = [(5.0, 7.0), (0.01, 0.03)] # rho, epsilon 的搜索范围
+
+    logging.info(f"===== staring seaching for NFE={nfe}  DDIM schedule =====")
+    param_bounds = [(5.0, 13.0), (0.01, 0.03)] # rho, epsilon 的搜索范围
+    # param_bounds = [(6.0, 6.0), (0.01, 0.01)]
     result = differential_evolution(
         fitness_function_for_ddim_es,
         bounds=param_bounds, args=(nfe, noise_schedule),
         maxiter=60, popsize=20, disp=True, tol=0.01, workers=1, updating='deferred'
     )
     best_rho, best_epsilon = result.x
-    logging.info(f"✅ DDIM 搜索完成！最优参数: rho = {best_rho:.4f}, epsilon = {best_epsilon:.5f}")
+    logging.info(f"✅ DDIM search done: rho = {best_rho:.4f}, epsilon = {best_epsilon:.5f}")
     return best_rho, best_epsilon
 
 
@@ -735,9 +657,9 @@ def set_global_seed(seed_value='None'):
         # torch.backends.cudnn.benchmark = False
     logging.info(f"Global random seed set to {seed_value}")
     
-# --- 主程序入口 ---
+
 if __name__ == '__main__':
-    # 初始化噪声调度器
+
     # seed = 66
     seed = None
     # set_global_seed(66)
@@ -750,11 +672,11 @@ if __name__ == '__main__':
         dtype=torch.float64
     )
     
-    # 设定我们想要求解的目标NFE
-    NFE_TO_SOLVE = 3
 
-    # --- 1. UniPC 调度优化 ---
-    logging.info(f"\n{'='*25}\n===== 1. 开始优化 UniPC 调度 =====\n{'='*25}")
+    NFE_TO_SOLVE = 4
+
+
+    logging.info(f"\n{'='*25}\n===== 1. start optim schedulec =====\n{'='*25}")
     best_rho_unipc, best_epsilon_unipc,best_t_max_unipc, error_score_unipc = run_unipc_search(nfe=NFE_TO_SOLVE, noise_schedule=ns_instance,seed=seed)
     
     final_schedule_unipc = find_optimal_schedule(
@@ -766,39 +688,39 @@ if __name__ == '__main__':
         return_fitness=False
     )
     
-    logging.info(f"\n--- 最终结果 (UniPC) ---")
-    logging.info(f"使用自动搜索到的 UniPC 最优参数 (rho={best_rho_unipc:.4f}, epsilon={best_epsilon_unipc:.5f})")
-    logging.info(f"📈 对应的最小总误差分数为: {error_score_unipc:.6e}")
+    logging.info(f"\n--- final result (UniPC) ---")
+    logging.info(f"the best parameters (rho={best_rho_unipc:.4f}, epsilon={best_epsilon_unipc:.5f})")
+    logging.info(f"📈 final error score: {error_score_unipc:.6e}")
     if final_schedule_unipc is not None:
-        logging.info(f"生成的最终优化调度 (UniPC, {len(final_schedule_unipc)} 点):")
+        logging.info(f"generating the unipc schedule (UniPC, {len(final_schedule_unipc)} values ):")
         print(np.array2string(final_schedule_unipc.cpu().numpy(), formatter={'float_kind':lambda x: "%.8f" % x}))
     else:
-        logging.error("未能成功生成最终 UniPC 调度。")
+        logging.error("find optimal schedule failed for unipc。")
 
-    # # --- 2. DDIM 调度优化 ---
-    # logging.info(f"\n{'='*25}\n===== 2. 开始优化 DDIM 调度 =====\n{'='*25}")
-    # best_rho_ddim, best_epsilon_ddim = run_ddim_search(nfe=NFE_TO_SOLVE, noise_schedule=ns_instance)
+    # --- 2. DDIM ---
+    logging.info(f"\n{'='*25}\n===== 2. starting DDIM schedule=====\n{'='*25}")
+    best_rho_ddim, best_epsilon_ddim = run_ddim_search(nfe=NFE_TO_SOLVE, noise_schedule=ns_instance)
 
-    # final_schedule_ddim_t = find_optimal_schedule_ddim(
-    #     nfe=NFE_TO_SOLVE,
-    #     noise_schedule=ns_instance,
-    #     initial_rho=best_rho_ddim,
-    #     initial_epsilon=best_epsilon_ddim,
-    #     return_fitness=False
-    # )
+    final_schedule_ddim_t = find_optimal_schedule_ddim(
+        nfe=NFE_TO_SOLVE,
+        noise_schedule=ns_instance,
+        initial_rho=best_rho_ddim,
+        initial_epsilon=best_epsilon_ddim,
+        return_fitness=False
+    )
 
-    # logging.info(f"\n--- 最终结果 (DDIM) ---")
-    # logging.info(f"使用自动搜索到的 DDIM 最优参数 (rho={best_rho_ddim:.4f}, epsilon={best_epsilon_ddim:.5f})")
-    # if final_schedule_ddim_t is not None:
-    #     logging.info(f"生成的优化连续时间调度 (DDIM, {len(final_schedule_ddim_t)} 点):")
-    #     print(np.array2string(final_schedule_ddim_t.cpu().numpy(), formatter={'float_kind':lambda x: "%.8f" % x}))
+    logging.info(f"\n--- final result (DDIM) ---")
+    logging.info(f"the best result for ddim (rho={best_rho_ddim:.4f}, epsilon={best_epsilon_ddim:.5f})")
+    if final_schedule_ddim_t is not None:
+        logging.info(f"generating the best schedule (DDIM, {len(final_schedule_ddim_t)} 点):")
+        print(np.array2string(final_schedule_ddim_t.cpu().numpy(), formatter={'float_kind':lambda x: "%.8f" % x}))
         
-    #     n_model_steps = ns_instance.num_trained_timesteps
-    #     ddim_timesteps_indices = (final_schedule_ddim_t.cpu().to(torch.float64) * n_model_steps).round().long() - 1
-    #     ddim_timesteps_indices = torch.clamp(ddim_timesteps_indices, min=0)
-    #     ddim_timesteps = ddim_timesteps_indices.cpu().numpy()
+        n_model_steps = ns_instance.num_trained_timesteps
+        ddim_timesteps_indices = (final_schedule_ddim_t.cpu().to(torch.float64) * n_model_steps).round().long() - 1
+        ddim_timesteps_indices = torch.clamp(ddim_timesteps_indices, min=0)
+        ddim_timesteps = ddim_timesteps_indices.cpu().numpy()
 
-    #     logging.info(f"\n转换后的离散 DDIM Timesteps ({len(ddim_timesteps)} 点，可直接用于采样器):")
-    #     print(ddim_timesteps)
-    # else:
-    #     logging.error("未能成功生成最终 DDIM 调度。")
+        logging.info(f"\n converted discrete DDIM Timesteps ({len(ddim_timesteps)} values):")
+        print(ddim_timesteps)
+    else:
+        logging.error("find optimal schedule failed for DDIM。")
