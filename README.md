@@ -1,5 +1,4 @@
-# MSOS - Adaptive Diffusion Sampling: A Meta-Learning Framework for Automated
-Schedule Optimization
+# MSOS - Adaptive Diffusion Sampling: A Meta-Learning Framework for Automated Schedule Optimization
 
 This repository provides a streamlined implementation of Stable Diffusion v2.1, with a focus on accelerated inference through the use of the `stages_step_optim.py` script. This allows for faster generation of high-quality images from text prompts.
 
