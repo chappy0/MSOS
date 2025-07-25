@@ -265,65 +265,61 @@ class StepOptim(object):
         return epsilon_tilde_base
 
     def _sel_lambdas_obj_calculator(self, lambda_vec_opt_part, N_intervals, eps_t_0_val, trunc_num_setting, use_pf_inspired_error_metric_calc_for_lte):
-        # This function is the core objective calculator and remains unchanged in its logic.
+        # This function is the core objective calculator.
+        # The initial setup remains the same, calculating the full lambda schedule from the optimized part.
         lambda_eps_val = self.lambda_func(eps_t_0_val).item()
         lambda_T_val = self.lambda_func(self.T_val).item()
         _lambdas_boundary = sorted([lambda_T_val, lambda_eps_val]) 
         actual_min_lambda_for_rho_calc = _lambdas_boundary[0]
+        
         lambda_vec_opt_part_np = np.array(lambda_vec_opt_part, dtype=np.float64)
         temp_concat = np.concatenate(([_lambdas_boundary[0]], lambda_vec_opt_part_np, [_lambdas_boundary[1]]))
         lambda_vec_ext_np = np.sort(np.unique(temp_concat))
+
         if len(lambda_vec_ext_np) != N_intervals + 1:
             logging.debug(f"Length mismatch in _sel_lambdas_obj_calculator: len(unique lambda_vec_ext_np)={len(lambda_vec_ext_np)} vs N_intervals+1={N_intervals+1}. Opt_part: {lambda_vec_opt_part_np}, Boundaries: {_lambdas_boundary}")
             return 1e12 
-        hv_np = np.diff(lambda_vec_ext_np); hv_np = np.maximum(hv_np, 1e-9) 
+            
+        hv_np = np.diff(lambda_vec_ext_np)
+        hv_np = np.maximum(hv_np, 1e-9) 
         elv_np = np.exp(lambda_vec_ext_np)
+        
         current_lambda_min_for_p_norm_calc = lambda_vec_ext_np[0]
         current_lambda_max_for_p_norm_calc = lambda_vec_ext_np[-1]
 
+
         if self.objective_type == 'paper_eq35':
-            aggregated_W = np.zeros(N_intervals)
-            for s_loop_idx in range(N_intervals): 
-                if N_intervals == 1: n_orig, kp_orig = 0, 1
-                elif s_loop_idx == 0: n_orig, kp_orig = 0, 1
-                elif s_loop_idx == N_intervals - 1 and N_intervals > 1: n_orig, kp_orig = s_loop_idx, 1
-                elif s_loop_idx == 1 or (s_loop_idx == N_intervals - 2 and N_intervals > 2): n_orig, kp_orig = s_loop_idx - 1, 2
-                else: n_orig, kp_orig = s_loop_idx - 2, 3
-                kp_orig = min(kp_orig, 3, N_intervals - n_orig if N_intervals - n_orig > 0 else 1)
-                if n_orig < 0: n_orig = 0
-                if kp_orig == 1:
-                    if n_orig + 1 >= len(elv_np): continue
-                    J0 = elv_np[n_orig+1] - elv_np[n_orig]
-                    if n_orig < N_intervals: aggregated_W[n_orig] += J0
-                elif kp_orig == 2:
-                    if n_orig+1 >= len(hv_np) or n_orig+2 >= len(elv_np): continue
-                    h_n, h_np1 = hv_np[n_orig], hv_np[n_orig+1]; denom_J = h_n.clip(min=1e-12)
-                    J0 = -elv_np[n_orig+2] * self.H1(h_np1) / denom_J
-                    J1 =  elv_np[n_orig+2] * (self.H1(h_np1) + h_n * self.H0(h_np1)) / denom_J
-                    if n_orig < N_intervals: aggregated_W[n_orig] += J0
-                    if n_orig + 1 < N_intervals: aggregated_W[n_orig+1] += J1
-                elif kp_orig == 3:
-                    if n_orig+2 >= len(hv_np) or n_orig+3 >= len(elv_np): continue
-                    h_n,h_np1,h_np2 = hv_np[n_orig],hv_np[n_orig+1],hv_np[n_orig+2]
-                    d0=(h_n*(h_n+h_np1)).clip(min=1e-12); d1=(h_n*h_np1).clip(min=1e-12); d2=(h_np1*(h_n+h_np1)).clip(min=1e-12)
-                    J0=elv_np[n_orig+3]*(self.H2(h_np2)+h_np1*self.H1(h_np2))/d0
-                    J1=-elv_np[n_orig+3]*(self.H2(h_np2)+(h_n+h_np1)*self.H1(h_np2))/d1
-                    J2=elv_np[n_orig+3]*(self.H2(h_np2)+(2*h_np1+h_n)*self.H1(h_np2)+h_np1*(h_n+h_np1)*self.H0(h_np2))/d2
-                    if n_orig < N_intervals: aggregated_W[n_orig] += J0
-                    if n_orig + 1 < N_intervals: aggregated_W[n_orig+1] += J1
-                    if n_orig + 2 < N_intervals: aggregated_W[n_orig+2] += J2
-            lambda_points_for_f_eval = lambda_vec_ext_np[:-1]
+            # 1. Calculate lambda midpoints: λ_{i+1/2}
+            # This corresponds to the term λ_{i+1/2} in the formula.
+            lambda_midpoints = (lambda_vec_ext_np[:-1] + lambda_vec_ext_np[1:]) / 2.0
 
-            if use_pf_inspired_error_metric_calc_for_lte:
-                if len(hv_np) == len(lambda_points_for_f_eval):
-                    lambda_points_for_f_eval = lambda_points_for_f_eval + hv_np / 2.0
+            # 2. Calculate the error term ε̃_t at these midpoints.
+            # This corresponds to the term ε̃_t(λ_{i+1/2}) in the formula.
+            epsilon_tilde_values = self._calculate_epsilon_tilde_vec(
+                lambda_midpoints, 
+                N_intervals, 
+                current_lambda_min_for_p_norm_calc, 
+                current_lambda_max_for_p_norm_calc, 
+                actual_min_lambda_for_rho_calc
+            )
 
-            epsilon_tilde_values = self._calculate_epsilon_tilde_vec(lambda_points_for_f_eval, N_intervals, current_lambda_min_for_p_norm_calc, current_lambda_max_for_p_norm_calc, actual_min_lambda_for_rho_calc)
-            if len(epsilon_tilde_values) != len(aggregated_W): 
-                logging.error(f"Size mismatch for objective: eps_tilde ({len(epsilon_tilde_values)}) vs W ({len(aggregated_W)})")
+            # 3. Calculate the difference of exponentiated lambdas for each interval.
+            # This corresponds to the term (e^{λ_{i+1}} - e^{λ_i}) in the formula.
+            exp_lambda_diffs = np.diff(elv_np) # elv_np is already exp(lambda_vec_ext_np)
+
+            # 4. Check for size consistency.
+            if len(epsilon_tilde_values) != len(exp_lambda_diffs): 
+                logging.error(f"Size mismatch for objective: eps_tilde ({len(epsilon_tilde_values)}) vs exp_lambda_diffs ({len(exp_lambda_diffs)})")
                 return 1e12
-            return np.sum(epsilon_tilde_values * np.abs(aggregated_W))
-        else: # LTE objectives (kept for completeness, though 'paper_eq35' is primary)
+            
+            # 5. Calculate the final objective value by summing the products.
+            # This performs the summation Σ ε̃_t(λ_{i+1/2}) * (e^{λ_{i+1}} - e^{λ_i}).
+            objective_value = np.sum(epsilon_tilde_values * exp_lambda_diffs)
+            
+            return objective_value
+
+        
+        else: 
             lambda_for_eps_tilde_lte = lambda_vec_ext_np[:-1]
             lambdas_for_metric_eval_lte = lambda_for_eps_tilde_lte
             if use_pf_inspired_error_metric_calc_for_lte:
@@ -377,6 +373,7 @@ class StepOptim(object):
                 elif self.objective_type in ['sum_of_squares', 'sum_of_squares_mse']: res_total+=np.sum(valid_c_acc**2)
             if self.objective_type=='sum_of_squares_mse': return res_total/N_intervals if N_intervals>0 else res_total
             return res_total
+
 
     def get_ts_lambdas(self, N_intervals, eps_t_0_val=None, initType='edm', init_rho=7.0, trunc_num_setting_input=None):
         if N_intervals <= 0:
@@ -493,7 +490,6 @@ def find_optimal_schedule(
             use_pf_inspired_error_metric_calc_for_lte=True
         )
         
-        # ... (Spacing penalty logic remains the same) ...
         t_schedule_np = optimized_t_steps.cpu().numpy()
         t_diffs = np.abs(np.diff(np.sort(t_schedule_np)))
         nfe_low, dist_at_low = 4.0, 0.15; nfe_high, dist_at_high = 20.0, 0.01
@@ -517,7 +513,8 @@ def fitness_function_for_unipc_es(params, nfe, noise_schedule):
     rho, epsilon, t_max = params[0], params[1], params[2]
     
     _, fitness_score = find_optimal_schedule(
-        nfe=nfe, noise_schedule=noise_schedule, initial_rho=rho,
+        nfe=nfe, noise_schedule=noise_schedule, 
+        initial_rho=rho,
         initial_epsilon=epsilon, 
         t_max=t_max, # Pass the new t_max to the inner loop
         return_fitness=True
@@ -530,11 +527,10 @@ def run_unipc_search(nfe: int, noise_schedule: NoiseScheduleVP,seed):
     
 
     param_bounds = [
-        (3.0, 13.0),     # Bounds for rho
+        (3.0, 16.0),     # Bounds for rho
         (0.01, 0.03),    # Bounds for epsilon
         (0.96, 1.0)      # Bounds for T_max (the upper bound)
     ]
-
     
     result = differential_evolution(
         fitness_function_for_unipc_es,
@@ -575,8 +571,8 @@ The goal is to directly produce an NFE-point t-schedule (spanning NFE-1 optimiza
     """
     logging.debug(f"Executing DDIM inner optimization for NFE={nfe}, rho={initial_rho:.2f}, epsilon={initial_epsilon:.5f}")
 
-    # original_T = noise_schedule.T
-    # noise_schedule.T = t_max
+    original_T = noise_schedule.T
+    noise_schedule.T = t_max
 
     if nfe <= 1:
         final_t = np.linspace(noise_schedule.T, initial_epsilon, nfe, dtype=np.float64)
@@ -621,26 +617,39 @@ The goal is to directly produce an NFE-point t-schedule (spanning NFE-1 optimiza
         return None, float('inf')
 
 def fitness_function_for_ddim_es(params, nfe, noise_schedule):
-    rho, epsilon = params[0], params[1]
+    rho, epsilon, t_max = params[0], params[1], params[2]
     _, fitness_score = find_optimal_schedule_ddim(
-        nfe=nfe, noise_schedule=noise_schedule, initial_rho=rho,
-        initial_epsilon=epsilon, return_fitness=True
+        nfe=nfe, noise_schedule=noise_schedule, 
+        initial_rho=rho,
+        initial_epsilon=epsilon, t_max=t_max, 
+        return_fitness=True
     )
     return fitness_score
 
-def run_ddim_search(nfe: int, noise_schedule: NoiseScheduleVP):
+def run_ddim_search(nfe: int, noise_schedule: NoiseScheduleVP,seed):
 
     logging.info(f"===== staring seaching for NFE={nfe}  DDIM schedule =====")
-    param_bounds = [(5.0, 13.0), (0.01, 0.03)] # rho, epsilon 的搜索范围
-    # param_bounds = [(6.0, 6.0), (0.01, 0.01)]
+
+    param_bounds = [
+    (3.0, 16.0),    # rho (no change needed)
+    (0.01, 0.03),   
+    (0.96, 1.0)      # t_max (explore much lower)
+    ]
+
     result = differential_evolution(
         fitness_function_for_ddim_es,
         bounds=param_bounds, args=(nfe, noise_schedule),
-        maxiter=60, popsize=20, disp=True, tol=0.01, workers=1, updating='deferred'
+        maxiter=60, popsize=20, disp=True, tol=0.01, workers=1, updating='deferred',
+        seed=seed
     )
-    best_rho, best_epsilon = result.x
-    logging.info(f"✅ DDIM search done: rho = {best_rho:.4f}, epsilon = {best_epsilon:.5f}")
-    return best_rho, best_epsilon
+
+    best_rho, best_epsilon, best_t_max = result.x
+    min_error_score = result.fun
+    
+    logging.info(f"✅ DDIM search finished! The best params: rho = {best_rho:.4f}, epsilon = {best_epsilon:.5f}, t_max = {best_t_max:.4f}")
+    logging.info(f"📉 DDIM minimum error score: {min_error_score:.6e}")
+
+    return best_rho, best_epsilon, best_t_max
 
 
 def set_global_seed(seed_value='None'):
@@ -673,7 +682,7 @@ if __name__ == '__main__':
     )
     
 
-    NFE_TO_SOLVE = 4
+    NFE_TO_SOLVE = 5
 
 
     logging.info(f"\n{'='*25}\n===== 1. start optim schedulec =====\n{'='*25}")
@@ -699,18 +708,23 @@ if __name__ == '__main__':
 
     # --- 2. DDIM ---
     logging.info(f"\n{'='*25}\n===== 2. starting DDIM schedule=====\n{'='*25}")
-    best_rho_ddim, best_epsilon_ddim = run_ddim_search(nfe=NFE_TO_SOLVE, noise_schedule=ns_instance)
+    best_rho_ddim, best_epsilon_ddim, best_t_max_ddim = run_ddim_search(
+        nfe=NFE_TO_SOLVE, noise_schedule=ns_instance, seed=seed
+    )
 
     final_schedule_ddim_t = find_optimal_schedule_ddim(
         nfe=NFE_TO_SOLVE,
         noise_schedule=ns_instance,
         initial_rho=best_rho_ddim,
         initial_epsilon=best_epsilon_ddim,
+        t_max=best_t_max_ddim, # <-- Pass the found t_max
         return_fitness=False
     )
 
     logging.info(f"\n--- final result (DDIM) ---")
-    logging.info(f"the best result for ddim (rho={best_rho_ddim:.4f}, epsilon={best_epsilon_ddim:.5f})")
+    logging.info(f"the best result for ddim (rho={best_rho_ddim:.4f}, epsilon={best_epsilon_ddim:.5f}, t_max={best_t_max_ddim:.4f})")
+    
+
     if final_schedule_ddim_t is not None:
         logging.info(f"generating the best schedule (DDIM, {len(final_schedule_ddim_t)} 点):")
         print(np.array2string(final_schedule_ddim_t.cpu().numpy(), formatter={'float_kind':lambda x: "%.8f" % x}))
